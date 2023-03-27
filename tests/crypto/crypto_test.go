@@ -7,19 +7,20 @@ import (
 
 func TestGetMd5(t *testing.T) {
 	testCases := []struct {
-		input    string
-		expected string
+		input string
+		bit   int
+		want  string
 	}{
-		{"", "d41d8cd98f00b204e9800998ecf8427e"},    // 空字符串的 MD5 值
-		{"foo", "acbd18db4cc2f85cedef654fccc4a4d8"}, // "foo" 的 MD5 值
-		{"bar", "37b51d194a7513e45b56f6524f2d51f2"}, // "bar" 的 MD5 值
-		{"baz", "73feffa4b7f6bb68e44cf984c85f6e88"}, // "baz" 的 MD5 值
+		{input: "hello world", bit: 16, want: "e01eeed093cb22bb"},
+		{input: "hello world", bit: 32, want: "5eb63bbbe01eeed093cb22bb8f5acdc3"},
+		{input: "", bit: 32, want: "d41d8cd98f00b204e9800998ecf8427e"},
+		{input: "foo", bit: 32, want: "acbd18db4cc2f85cedef654fccc4a4d8"},
 	}
 
 	for _, tc := range testCases {
-		output := crypto.GetMd5(tc.input)
-		if output != tc.expected {
-			t.Errorf("GetMd5(%q) = %q, 希望返回 %q", tc.input, output, tc.expected)
+		got := crypto.GetMd5(tc.input, tc.bit)
+		if got != tc.want {
+			t.Errorf("getMd5(%q, %d) = %q; want %q", tc.input, tc.bit, got, tc.want)
 		}
 	}
 }
