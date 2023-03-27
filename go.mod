@@ -1,3 +1,3 @@
-module github.com/0xIsRookie/Command
+module github.com/0xIsRookie/common
 
 go 1.19
