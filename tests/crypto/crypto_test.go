@@ -1,7 +1,7 @@
 package crypto
 
 import (
-	"github.com/0xIsRookie/Command/crypto"
+	"github.com/0xIsRookie/common/crypto"
 	"testing"
 )
 

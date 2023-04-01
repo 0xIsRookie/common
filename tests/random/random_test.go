@@ -2,7 +2,7 @@ package random
 
 import (
 	"errors"
-	"github.com/0xIsRookie/Command/random"
+	"github.com/0xIsRookie/common/random"
 	"testing"
 )
 

@@ -2,6 +2,8 @@ package http
 
 import (
 	"context"
+	"fmt"
+	"log"
 	"net"
 	"net/http"
 	stURL "net/url"
@@ -10,6 +12,12 @@ import (
 	"time"
 )
 
+func init() {
+	dnsCache = new(DnsCache)
+	dnsCache.Params = make(map[string]*domainCache)
+	dnsCache.delayFunction()
+}
+
 // SetDefaultHeaders 设置默认headers
 func SetDefaultHeaders() map[string]string {
 	return map[string]string{
@@ -17,37 +25,75 @@ func SetDefaultHeaders() map[string]string {
 	}
 }
 
-type Dial func(string, string) (net.Conn, error)
+var dnsCache *DnsCache
 
-// SelectIp 选择请求IP
-func SelectIp(ip string) Dial {
-	if ip == "" {
-		return nil
-	}
-	return func(netw, addr string) (net.Conn, error) {
-		lAddr, err := net.ResolveTCPAddr(netw, ip+":0")
-		if err != nil {
-			return nil, err
-		}
-		// 被请求的地址
-		rAddr, err := net.ResolveTCPAddr(netw, addr)
-		if err != nil {
-			return nil, err
-		}
-		conn, err := net.DialTCP(netw, lAddr, rAddr)
-		if err != nil {
-			return nil, err
-		}
-		deadline := time.Now().Add(35 * time.Second)
-		conn.SetDeadline(deadline)
-		return conn, nil
-	}
+// DnsCache 是一个 DNS 缓存对象，提供了 DNS 查询和缓存功能，可以在应用中快速查询 URL 对应的 IP 地址。
+type DnsCache struct {
+	Params      map[string]*domainCache // URL 对应的 DNS 数据集合
+	dnsLookLock sync.Mutex              // DNS 查询锁
 }
 
-var sendIp = ""
-var number = 0
-var maxNumber = 20
-var dnsLookLock sync.Mutex
+// domainCache 存储了 DNS 缓存数据，包括服务器 IP 地址和上次查询时间。
+type domainCache struct {
+	ServerIP   string    // 服务器 IP 地址
+	updateTime time.Time // 上次查询 DNS 的时间
+}
+
+// dnsLookup 根据 URL 对应的主机名查询 IP 地址，并返回查询结果和错误信息。
+//
+// 参数：
+//   - url：待查询的 URL 对象，从中提取出主机名进行 DNS 查询
+//   - expiration：DNS 缓存有效期，单位为秒
+//
+// 返回值：
+//   - string：查询到的 IP 地址
+//   - error：查询过程中的错误信息，如果没有错误则为 nil
+func (d *DnsCache) dnsLookup(url *stURL.URL, expiration time.Duration) (string, error) {
+	d.dnsLookLock.Lock()
+	defer d.dnsLookLock.Unlock()
+
+	key := url.Host
+	if param, ok := d.Params[key]; ok {
+		timeDiff := time.Now().Sub(param.updateTime)
+		if timeDiff <= expiration*time.Second {
+			return param.ServerIP, nil
+		}
+	}
+	records, err := net.LookupIP(url.Hostname())
+	if err != nil {
+		return "", err
+	}
+	for _, ip := range records {
+		d.Params[key] = &domainCache{
+			ServerIP:   ip.String(),
+			updateTime: time.Now(),
+		}
+		break
+	}
+	log.Printf("新DNS缓存: %s:%s", key, d.Params[key].ServerIP)
+	return d.Params[key].ServerIP, nil
+}
+
+// delayFunction 启动一个后台任务，定期清理过期的 DNS 缓存。
+func (d *DnsCache) delayFunction() {
+	go func() {
+		for {
+			timer := time.NewTimer(10 * time.Minute)
+
+			select {
+			case <-timer.C:
+				fmt.Println("开始自动清理DNS缓存...")
+				for key, value := range d.Params {
+					timeDiff := time.Now().Sub(value.updateTime)
+					if timeDiff >= 5*time.Minute {
+						log.Printf("删除DNS缓存数据 %s:%s", key, d.Params[key].ServerIP)
+						delete(d.Params, key)
+					}
+				}
+			}
+		}
+	}()
+}
 
 // request 封装了 HTTP 请求，可以通过指定请求类型、URL、数据、请求头、超时时间和请求 IP 等参数来发送 HTTP 请求，
 // 并返回响应结果和错误信息。
@@ -64,23 +110,10 @@ var dnsLookLock sync.Mutex
 //   - *http.Response：HTTP 响应结果
 //   - error：请求过程中的错误信息，如果没有错误则为 nil
 func request(_type, url, data string, headers map[string]string, timeout int, ip string) (*http.Response, error) {
-	domain, _ := stURL.Parse(url)
-	if number == 0 {
-		dnsLookLock.Lock()
-		if number == 0 {
-			iprecords, _ := net.LookupIP(domain.Hostname())
-			for _, ip := range iprecords {
-				sendIp = ip.String()
-				break
-			}
-		}
-		number += 1
-		dnsLookLock.Unlock()
-	}
-
-	number += 1
-	if number > maxNumber {
-		number = 0
+	parse, _ := stURL.Parse(url)
+	ServerIP, err := dnsCache.dnsLookup(parse, 30)
+	if err != nil {
+		return nil, err
 	}
 	client := http.Client{
 		Timeout: time.Duration(timeout) * time.Second,
@@ -91,10 +124,8 @@ func request(_type, url, data string, headers map[string]string, timeout int, ip
 					return nil, err
 				}
 				// 被请求的地址
-				tt := sendIp + ":" + strings.Split(addr, ":")[1]
+				tt := ServerIP + ":" + strings.Split(addr, ":")[1]
 				rAddr, err := net.ResolveTCPAddr(network, tt)
-				//log.Println(addr, tt)
-				//rAddr, err := net.ResolveTCPAddr(network, addr)
 				if err != nil {
 					return nil, err
 				}

@@ -1,7 +1,7 @@
 package file
 
 import (
-	"github.com/0xIsRookie/Command/file"
+	"github.com/0xIsRookie/common/file"
 	"os"
 	"testing"
 )
