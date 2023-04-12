@@ -7,6 +7,7 @@ import (
 )
 
 func TestRequest(t *testing.T) {
+	//http.UseDNSCache()
 	headers := map[string]string{"Content-Type": "application/json"}
 	timeout := 10
 	ip := ""

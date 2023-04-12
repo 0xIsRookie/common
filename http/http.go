@@ -12,10 +12,25 @@ import (
 	"time"
 )
 
-func init() {
-	dnsCache = new(DnsCache)
-	dnsCache.Params = make(map[string]*domainCache)
-	dnsCache.delayFunction()
+var once sync.Once
+
+// UseDNSCache 使用DNS缓存
+func UseDNSCache() {
+	once.Do(func() {
+		dnsCache = new(DnsCache)
+		dnsCache.Params = make(map[string]*domainCache)
+		dnsCache.delayFunction()
+		ctx, cancel := context.WithCancel(context.Background())
+		dnsCache.ctx = ctx
+		dnsCache.cancel = cancel
+	})
+}
+
+// StopDNSCache 停止使用DNS缓存
+func StopDNSCache() {
+	dnsCache.cancel()
+	dnsCache = nil
+	once = sync.Once{}
 }
 
 // SetDefaultHeaders 设置默认headers
@@ -31,6 +46,8 @@ var dnsCache *DnsCache
 type DnsCache struct {
 	Params      map[string]*domainCache // URL 对应的 DNS 数据集合
 	dnsLookLock sync.Mutex              // DNS 查询锁
+	cancel      context.CancelFunc
+	ctx         context.Context
 }
 
 // domainCache 存储了 DNS 缓存数据，包括服务器 IP 地址和上次查询时间。
@@ -79,8 +96,9 @@ func (d *DnsCache) delayFunction() {
 	go func() {
 		for {
 			timer := time.NewTimer(10 * time.Minute)
-
 			select {
+			case <-d.ctx.Done():
+				timer.Stop()
 			case <-timer.C:
 				fmt.Println("开始自动清理DNS缓存...")
 				for key, value := range d.Params {
@@ -111,10 +129,15 @@ func (d *DnsCache) delayFunction() {
 //   - error：请求过程中的错误信息，如果没有错误则为 nil
 func request(_type, url, data string, headers map[string]string, timeout int, ip string) (*http.Response, error) {
 	parse, _ := stURL.Parse(url)
-	ServerIP, err := dnsCache.dnsLookup(parse, 30)
-	if err != nil {
-		return nil, err
+	var ServerIP string
+	var err error
+	if dnsCache != nil {
+		ServerIP, err = dnsCache.dnsLookup(parse, 30)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	client := http.Client{
 		Timeout: time.Duration(timeout) * time.Second,
 		Transport: &http.Transport{
@@ -124,10 +147,15 @@ func request(_type, url, data string, headers map[string]string, timeout int, ip
 					return nil, err
 				}
 				// 被请求的地址
-				tt := ServerIP + ":" + strings.Split(addr, ":")[1]
-				rAddr, err := net.ResolveTCPAddr(network, tt)
-				if err != nil {
-					return nil, err
+				var rAddr *net.TCPAddr
+				if ServerIP != "" {
+					tt := ServerIP + ":" + strings.Split(addr, ":")[1]
+					rAddr, err = net.ResolveTCPAddr(network, tt)
+					if err != nil {
+						return nil, err
+					}
+				} else {
+					rAddr, err = net.ResolveTCPAddr(network, addr)
 				}
 				conn, err := net.DialTCP(network, lAddr, rAddr)
 				if err != nil {
